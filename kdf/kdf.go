@@ -9,9 +9,7 @@ import (
 	"io"
 )
 
-type KDF func([]byte) ([]byte, error)
-
-func HKDF(salt, info []byte, keyLen int, h func() hash.Hash) KDF {
+func HKDF(salt, info []byte, keyLen int, h func() hash.Hash) func([]byte) ([]byte, error) {
 	return func(secret []byte) (key []byte, err error) {
 		key = make([]byte, keyLen)
 		kdf := hkdf.New(h, secret, salt, info)
@@ -21,12 +19,12 @@ func HKDF(salt, info []byte, keyLen int, h func() hash.Hash) KDF {
 		return key, nil
 	}
 }
-func Scrypt(salt []byte, N, r, p, keyLen int) KDF {
+func Scrypt(salt []byte, N, r, p, keyLen int) func([]byte) ([]byte, error) {
 	return func(secret []byte) ([]byte, error) {
 		return scrypt.Key(secret, salt, N, r, p, keyLen)
 	}
 }
-func PBKDF2(salt []byte, iter, keyLen int, h func() hash.Hash) KDF {
+func PBKDF2(salt []byte, iter, keyLen int, h func() hash.Hash) func([]byte) ([]byte, error) {
 	return func(secret []byte) ([]byte, error) {
 		return pbkdf2.Key(secret, salt, iter, keyLen, h), nil
 	}

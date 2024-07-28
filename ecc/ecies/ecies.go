@@ -2,14 +2,15 @@ package ecies
 
 import (
 	"bytes"
-	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/rand"
 	"fmt"
-	"github.com/93ams/crypto/kdf"
 	"io"
 )
+
+type Cipher func([]byte) (cipher.AEAD, error)
+type KDF func([]byte) ([]byte, error)
 
 type PublicKey interface {
 	Bytes() []byte
@@ -28,12 +29,10 @@ var _ PrivateKey[*ecdh.PublicKey] = (*ecdh.PrivateKey)(nil)
 var _ Curve[*ecdh.PublicKey, *ecdh.PrivateKey] = ecdh.Curve(nil)
 
 type ECIES[PubKey PublicKey, PrvKey PrivateKey[PubKey]] struct {
-	Curve Curve[PubKey, PrvKey]
-	KDF   kdf.KDF
+	Curve  Curve[PubKey, PrvKey]
+	Cipher Cipher
+	KDF    KDF
 }
-
-const nonceSize = 16
-const gcmTagSize = 16
 
 // Encrypt encrypts a passed message with a receiver public key, returns ciphertext or encryption error
 func (ecies ECIES[PubKey, PrvKey]) Encrypt(pubkey PubKey, msg []byte) ([]byte, error) {
@@ -53,29 +52,24 @@ func (ecies ECIES[PubKey, PrvKey]) Encrypt(pubkey PubKey, msg []byte) ([]byte, e
 		return nil, err
 	}
 
-	// AES encryption
-	block, err := aes.NewCipher(ss)
+	c, err := ecies.Cipher(ss)
 	if err != nil {
-		return nil, fmt.Errorf("cannot create new aes block: %w", err)
+		return nil, fmt.Errorf("cannot create cipher: %w", err)
 	}
+	nonceSize := c.NonceSize()
+	tagSize := c.Overhead()
 
-	nonce := make([]byte, 16)
+	nonce := make([]byte, nonceSize)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("cannot read random bytes for nonce: %w", err)
 	}
-
 	ct.Write(nonce)
 
-	aesgcm, err := cipher.NewGCMWithNonceSize(block, nonceSize)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create aes gcm: %w", err)
-	}
+	ciphertext := c.Seal(nil, nonce, msg, nil)
 
-	ciphertext := aesgcm.Seal(nil, nonce, msg, nil)
-
-	tag := ciphertext[len(ciphertext)-aesgcm.NonceSize():]
+	tag := ciphertext[len(ciphertext)-tagSize:]
 	ct.Write(tag)
-	ciphertext = ciphertext[:len(ciphertext)-len(tag)]
+	ciphertext = ciphertext[:len(ciphertext)-tagSize]
 	ct.Write(ciphertext)
 
 	return ct.Bytes(), nil
@@ -84,19 +78,11 @@ func (ecies ECIES[PubKey, PrvKey]) Encrypt(pubkey PubKey, msg []byte) ([]byte, e
 // Decrypt decrypts a passed message with a receiver private key, returns plaintext or decryption error
 func (ecies ECIES[PubKey, PrvKey]) Decrypt(privkey PrvKey, msg []byte) ([]byte, error) {
 	pkLen := len(privkey.PublicKey().Bytes())
-	// Message cannot be less than length of public key (65) + nonce (16) + tag (16)
-	if len(msg) <= (pkLen + nonceSize + gcmTagSize) {
-		return nil, fmt.Errorf("invalid length of message")
-	}
-	// Ephemeral sender public key
+
 	ek, err := ecies.Curve.NewPublicKey(msg[:pkLen])
 	if err != nil {
 		return nil, err
 	}
-	// Shift message
-	msg = msg[pkLen:]
-
-	// Derive shared secret
 	ss, err := privkey.ECDH(ek)
 	if err != nil {
 		return nil, err
@@ -105,27 +91,12 @@ func (ecies ECIES[PubKey, PrvKey]) Decrypt(privkey PrvKey, msg []byte) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
-
-	// AES decryption part
-	nonce, tag := msg[:nonceSize], msg[nonceSize:nonceSize+gcmTagSize]
-
-	// Create Golang-accepted ciphertext
-	ciphertext := bytes.Join([][]byte{msg[nonceSize+gcmTagSize:], tag}, nil)
-
-	block, err := aes.NewCipher(ss)
+	c, err := ecies.Cipher(ss)
 	if err != nil {
-		return nil, fmt.Errorf("cannot create new aes block: %w", err)
+		return nil, fmt.Errorf("cannot create cipher: %w", err)
 	}
-
-	gcm, err := cipher.NewGCMWithNonceSize(block, 16)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create gcm cipher: %w", err)
-	}
-
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return nil, fmt.Errorf("cannot decrypt ciphertext: %w", err)
-	}
-
-	return plaintext, nil
+	msg = msg[pkLen:]
+	tagSize := c.Overhead()
+	nonceSize := c.NonceSize()
+	return c.Open(nil, msg[:nonceSize], bytes.Join([][]byte{msg[nonceSize+tagSize:], msg[nonceSize : nonceSize+tagSize]}, nil), nil)
 }
