@@ -8,10 +8,27 @@ import (
 	"crypto/rand"
 	"fmt"
 	"github.com/93ams/crypto/kdf"
+	"io"
 )
 
-type ECIES struct {
-	Curve ecdh.Curve
+type PublicKey interface {
+	Bytes() []byte
+}
+type PrivateKey[PubKey PublicKey] interface {
+	ECDH(PubKey) ([]byte, error)
+	PublicKey() PubKey
+}
+type Curve[PubKey PublicKey, PrvKey PrivateKey[PubKey]] interface {
+	GenerateKey(io.Reader) (PrvKey, error)
+	NewPublicKey([]byte) (PubKey, error)
+}
+
+var _ PublicKey = (*ecdh.PublicKey)(nil)
+var _ PrivateKey[*ecdh.PublicKey] = (*ecdh.PrivateKey)(nil)
+var _ Curve[*ecdh.PublicKey, *ecdh.PrivateKey] = ecdh.Curve(nil)
+
+type ECIES[PubKey PublicKey, PrvKey PrivateKey[PubKey]] struct {
+	Curve Curve[PubKey, PrvKey]
 	KDF   kdf.KDF
 }
 
@@ -19,7 +36,7 @@ const nonceSize = 16
 const gcmTagSize = 16
 
 // Encrypt encrypts a passed message with a receiver public key, returns ciphertext or encryption error
-func (ecies ECIES) Encrypt(pubkey *ecdh.PublicKey, msg []byte) ([]byte, error) {
+func (ecies ECIES[PubKey, PrvKey]) Encrypt(pubkey PubKey, msg []byte) ([]byte, error) {
 	var ct bytes.Buffer
 	ek, err := ecies.Curve.GenerateKey(rand.Reader)
 	if err != nil {
@@ -65,7 +82,7 @@ func (ecies ECIES) Encrypt(pubkey *ecdh.PublicKey, msg []byte) ([]byte, error) {
 }
 
 // Decrypt decrypts a passed message with a receiver private key, returns plaintext or decryption error
-func (ecies ECIES) Decrypt(privkey *ecdh.PrivateKey, msg []byte) ([]byte, error) {
+func (ecies ECIES[PubKey, PrvKey]) Decrypt(privkey PrvKey, msg []byte) ([]byte, error) {
 	pkLen := len(privkey.PublicKey().Bytes())
 	// Message cannot be less than length of public key (65) + nonce (16) + tag (16)
 	if len(msg) <= (pkLen + nonceSize + gcmTagSize) {

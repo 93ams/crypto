@@ -3,6 +3,7 @@ module github.com/93ams/crypto
 go 1.22
 
 require (
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0
 	github.com/stretchr/testify v1.9.0
 	golang.org/x/crypto v0.25.0
 )
