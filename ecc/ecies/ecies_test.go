@@ -4,7 +4,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
-	"github.com/93ams/crypto/aes"
+	"github.com/93ams/crypto/aead"
 	"github.com/93ams/crypto/ecc/ecies"
 	"github.com/93ams/crypto/ecc/secp256k1"
 	"github.com/93ams/crypto/kdf"
@@ -17,9 +17,9 @@ var salt = []byte("saltyboy")
 
 func TestECDH(t *testing.T) {
 	for _, aeas := range []ecies.Cipher{
-		aes.GCM(12),
-		aes.GCM(16),
-		aes.GCM(20),
+		aead.GCM(12),
+		aead.GCM(16),
+		aead.GCM(20),
 		chacha20poly1305.New,
 		chacha20poly1305.NewX,
 	} {
@@ -57,7 +57,7 @@ func TestECDH(t *testing.T) {
 }
 func TestSecp256k1(t *testing.T) {
 	for _, aeas := range []ecies.Cipher{
-		aes.GCM(16),
+		aead.GCM(16),
 		chacha20poly1305.New,
 		chacha20poly1305.NewX,
 	} {
@@ -72,15 +72,20 @@ func TestSecp256k1(t *testing.T) {
 				Curve:  curve,
 				KDF:    df,
 			}
-			pk, err := curve.GenerateKey(rand.Reader)
+			prv, pub, err := secp256k1.NewPemPair()
+			require.NoError(t, err)
+
+			privateKey, err := secp256k1.UnmarshalPrivateKey(prv)
+			require.NoError(t, err)
+			publicKey, err := secp256k1.UnmarshalPublicKey(pub)
 			require.NoError(t, err)
 
 			expected := []byte("hello")
 
-			encrypted, err := e.Encrypt(pk.PublicKey(), expected)
+			encrypted, err := e.Encrypt(secp256k1.PublicKey{PublicKey: publicKey}, expected)
 			require.NoError(t, err)
 
-			actual, err := e.Decrypt(pk, encrypted)
+			actual, err := e.Decrypt(secp256k1.PrivateKey{PrivateKey: privateKey}, encrypted)
 			require.NoError(t, err)
 
 			require.Equal(t, expected, actual)
