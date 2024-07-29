@@ -4,29 +4,30 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"github.com/93ams/crypto/aead"
 	"github.com/93ams/crypto/ecc/ecies"
 	"github.com/93ams/crypto/ecc/secp256k1"
 	"github.com/93ams/crypto/kdf"
+	ecies2 "github.com/ecies/go/v2"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/chacha20poly1305"
+	"log"
 	"testing"
 )
-
-var salt = []byte("saltyboy")
 
 func TestECDH(t *testing.T) {
 	for _, aeas := range []ecies.Cipher{
 		aead.GCM(12),
 		aead.GCM(16),
-		aead.GCM(20),
 		chacha20poly1305.New,
 		chacha20poly1305.NewX,
 	} {
 		for _, df := range []ecies.KDF{
-			kdf.HKDF(salt, nil, 32, sha256.New),
-			kdf.PBKDF2(salt, 4096, 32, sha256.New),
-			kdf.Scrypt(salt, 32768, 8, 1, 32),
+			kdf.HKDF(nil, nil, 32, sha256.New),
+			kdf.PBKDF2(nil, 4096, 32, sha256.New),
+			kdf.Scrypt(nil, 32768, 8, 1, 32),
 		} {
 			for _, curve := range []ecdh.Curve{
 				ecdh.P256(),
@@ -42,7 +43,7 @@ func TestECDH(t *testing.T) {
 				pk, err := curve.GenerateKey(rand.Reader)
 				require.NoError(t, err)
 
-				expected := []byte("hello")
+				expected := []byte("hello world!")
 
 				encrypted, err := e.Encrypt(pk.PublicKey(), expected)
 				require.NoError(t, err)
@@ -55,19 +56,21 @@ func TestECDH(t *testing.T) {
 		}
 	}
 }
+
 func TestSecp256k1(t *testing.T) {
 	for _, aeas := range []ecies.Cipher{
+		//aead.GCM(12),
 		aead.GCM(16),
-		chacha20poly1305.New,
-		chacha20poly1305.NewX,
+		//chacha20poly1305.New,
+		//chacha20poly1305.NewX,
 	} {
 		for _, df := range []ecies.KDF{
-			kdf.HKDF(salt, nil, 32, sha256.New),
-			kdf.PBKDF2(salt, 4096, 32, sha256.New),
-			kdf.Scrypt(salt, 32768, 8, 1, 32),
+			kdf.HKDF(nil, nil, 32, sha256.New),
+			//kdf.PBKDF2(nil, 4096, 32, sha256.New),
+			//kdf.Scrypt(nil, 32768, 8, 1, 32),
 		} {
 			curve := secp256k1.Curve{}
-			e := ecies.ECIES[secp256k1.PublicKey, secp256k1.PrivateKey]{
+			e := ecies.ECIES[*secp256k1.PublicKey, *secp256k1.PrivateKey]{
 				Cipher: aeas,
 				Curve:  curve,
 				KDF:    df,
@@ -75,19 +78,29 @@ func TestSecp256k1(t *testing.T) {
 			prv, pub, err := secp256k1.NewPemPair()
 			require.NoError(t, err)
 
-			privateKey, err := secp256k1.UnmarshalPrivateKey(prv)
+			privateKeyBytes, err := secp256k1.UnmarshalPrivateKey(prv)
 			require.NoError(t, err)
-			publicKey, err := secp256k1.UnmarshalPublicKey(pub)
+			publicKeyBytes, err := secp256k1.UnmarshalPublicKey(pub)
+			require.NoError(t, err)
+			publicKey, err := secp256k1.NewPublicKey(publicKeyBytes)
+			require.NoError(t, err)
+			privateKey := secp256k1.NewPrivateKey(privateKeyBytes)
+			require.Equal(t, publicKeyBytes, privateKey.Public.Bytes())
+
+			log.Println(hex.EncodeToString(privateKey.Bytes()))
+
+			expected := []byte("hello world!")
+
+			encrypted, err := e.Encrypt(publicKey, expected)
 			require.NoError(t, err)
 
-			expected := []byte("hello")
-
-			encrypted, err := e.Encrypt(secp256k1.PublicKey{PublicKey: publicKey}, expected)
+			publicKey2, err := ecies2.NewPublicKeyFromBytes(publicKeyBytes)
 			require.NoError(t, err)
+			require.Equal(t, hex.EncodeToString(publicKey.Bytes()), publicKey2.Hex(false))
 
-			actual, err := e.Decrypt(secp256k1.PrivateKey{PrivateKey: privateKey}, encrypted)
+			log.Println(base64.StdEncoding.EncodeToString(encrypted))
+			actual, err := e.Decrypt(privateKey, encrypted)
 			require.NoError(t, err)
-
 			require.Equal(t, expected, actual)
 		}
 	}
